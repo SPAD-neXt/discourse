@@ -1043,6 +1043,126 @@ RSpec.describe UsersController do
       end
     end
 
+    context "when new registrations are disabled" do
+      before { SiteSetting.allow_new_registrations = false }
+
+      it "allows an admin API key to provision an active user with a Discord association" do
+        SiteSetting.enable_discord_logins = true
+        SiteSetting.enable_local_logins = false
+        SiteSetting.must_approve_users = true
+        api_key = Fabricate(:api_key, user: admin)
+        discord_id = "123456789012345678"
+
+        expect {
+          post "/users.json",
+               params:
+                 post_user_params.merge(
+                   active: true,
+                   approved: true,
+                   staged: false,
+                   external_ids: {
+                     discord: discord_id,
+                   },
+                 ),
+               headers: {
+                 HTTP_API_KEY: api_key.key,
+               }
+        }.to change { User.count }.by(1)
+
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body["success"]).to eq(true)
+        created_user = User.find(response.parsed_body["user_id"])
+        expect(created_user).to have_attributes(
+          email: @user.email,
+          active: true,
+          approved: true,
+          staged: false,
+        )
+        expect(
+          created_user.user_associated_accounts.pluck(:provider_name, :provider_uid),
+        ).to contain_exactly(["discord", discord_id])
+      end
+
+      it "rejects anonymous registration" do
+        expect { post_user }.not_to change { User.count }
+
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body).to include(
+          "success" => false,
+          "message" => I18n.t("login.new_registrations_disabled"),
+        )
+      end
+
+      it "rejects registration from an admin browser session without an API key" do
+        sign_in(admin)
+
+        expect { post_user }.not_to change { User.count }
+
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body["success"]).to eq(false)
+      end
+
+      it "rejects a regular user's API key" do
+        api_key = Fabricate(:api_key, user: user1)
+
+        expect {
+          post "/users.json", params: post_user_params, headers: { HTTP_API_KEY: api_key.key }
+        }.not_to change { User.count }
+
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body["success"]).to eq(false)
+      end
+
+      it "rejects a moderator's API key" do
+        api_key = Fabricate(:api_key, user: moderator)
+
+        expect {
+          post "/users.json", params: post_user_params, headers: { HTTP_API_KEY: api_key.key }
+        }.not_to change { User.count }
+
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body["success"]).to eq(false)
+      end
+
+      it "rejects an invalid API key even when an admin username is supplied" do
+        expect {
+          post "/users.json",
+               params: post_user_params,
+               headers: {
+                 HTTP_API_KEY: "invalid-api-key",
+                 HTTP_API_USERNAME: admin.username,
+               }
+        }.not_to change { User.count }
+
+        expect(response).to have_http_status(:forbidden)
+      end
+
+      it "enforces the read-only scope of an admin API key" do
+        api_key = Fabricate(:read_only_api_key, user: admin)
+
+        expect {
+          post "/users.json", params: post_user_params, headers: { HTTP_API_KEY: api_key.key }
+        }.not_to change { User.count }
+
+        expect(response).to have_http_status(:forbidden)
+      end
+
+      it "preserves account validation for an admin API key" do
+        api_key = Fabricate(:api_key, user: admin)
+
+        expect {
+          post "/users.json",
+               params: post_user_params.merge(email: "invalid-email"),
+               headers: {
+                 HTTP_API_KEY: api_key.key,
+               }
+        }.not_to change { User.count }
+
+        expect(response).to have_http_status(:ok)
+        expect(response.parsed_body["success"]).to eq(false)
+      end
+    end
+
     context "when creating a non active user (unconfirmed email)" do
       it "returns 403 forbidden when local logins are disabled" do
         SiteSetting.enable_local_logins = false
