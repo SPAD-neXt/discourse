@@ -112,4 +112,71 @@ describe "Discord OAuth2" do
     expect(response.location).to eq("http://test.localhost/")
     expect(session[:current_user_id]).to eq(user1.id)
   end
+
+  it "rejects an unknown Discord user before signup when registration is closed" do
+    SiteSetting.allow_new_registrations = false
+    SiteSetting.invite_only = false
+    SiteSetting.login_required = false
+    setup_discord_email_stub("unregistered@example.com", verified: true)
+    post "/auth/discord"
+
+    expect do
+      post "/auth/discord/callback", params: { state: session["omniauth.state"], code: temp_code }
+    end.not_to change(User, :count)
+
+    expect(response.status).to eq(200)
+    expect(response.body).to include(I18n.t("login.new_registrations_disabled"))
+    expect(session[:current_user_id]).to be_blank
+    expect(cookies[:authentication_data]).to be_blank
+  end
+
+  it "rejects a staged Discord user before signup when registration is closed" do
+    SiteSetting.allow_new_registrations = false
+    user1.update!(staged: true)
+    setup_discord_email_stub(user1.email, verified: true)
+    post "/auth/discord"
+
+    expect do
+      post "/auth/discord/callback", params: { state: session["omniauth.state"], code: temp_code }
+    end.not_to change(User, :count)
+
+    expect(response.status).to eq(200)
+    expect(response.body).to include(I18n.t("login.new_registrations_disabled"))
+    expect(session[:current_user_id]).to be_blank
+    expect(cookies[:authentication_data]).to be_blank
+    expect(user1.reload.staged).to eq(true)
+  end
+
+  it "signs in a pre-associated Discord user when registration is closed" do
+    SiteSetting.allow_new_registrations = false
+    SiteSetting.enable_local_logins = false
+    Fabricate(
+      :user_associated_account,
+      user: user1,
+      provider_name: "discord",
+      provider_uid: "80351110224678912",
+    )
+    setup_discord_email_stub("discord-notifications@example.com", verified: true)
+    post "/auth/discord"
+
+    expect do
+      post "/auth/discord/callback", params: { state: session["omniauth.state"], code: temp_code }
+    end.not_to change(User, :count)
+
+    expect(response).to redirect_to("http://test.localhost/")
+    expect(session[:current_user_id]).to eq(user1.id)
+    expect(user1.reload.email).not_to eq("discord-notifications@example.com")
+  end
+
+  it "offers signup to an unknown Discord user when registration is open" do
+    SiteSetting.allow_new_registrations = true
+    setup_discord_email_stub("unregistered@example.com", verified: true)
+    post "/auth/discord"
+
+    post "/auth/discord/callback", params: { state: session["omniauth.state"], code: temp_code }
+
+    expect(response).to redirect_to("http://test.localhost/")
+    expect(session[:current_user_id]).to be_blank
+    expect(cookies[:authentication_data]).to be_present
+  end
 end

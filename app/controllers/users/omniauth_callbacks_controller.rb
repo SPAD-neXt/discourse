@@ -147,6 +147,11 @@ class Users::OmniauthCallbacksController < ApplicationController
   def complete_response_data
     if @auth_result.user
       user_found(@auth_result.user)
+    elsif !SiteSetting.allow_new_registrations
+      server_session.delete(:authentication)
+      cookies.delete(:authentication_data)
+      @auth_result.failed = true
+      @auth_result.failed_reason = I18n.t("login.new_registrations_disabled")
     elsif invite_required?
       @auth_result.requires_invite = true
     else
