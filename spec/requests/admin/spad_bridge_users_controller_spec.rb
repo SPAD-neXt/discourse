@@ -40,7 +40,7 @@ RSpec.describe Admin::SpadBridgeUsersController do
       expect(response.status).to eq(200)
       body = response.parsed_body
       expect(body).to include(
-        "schema_version" => 1,
+        "schema_version" => 2,
         "offset" => 0,
         "complete" => true,
         "next_offset" => nil,
@@ -58,6 +58,7 @@ RSpec.describe Admin::SpadBridgeUsersController do
         "approved",
         "staged",
         "discord_id",
+        "group_ids",
       )
       expect(response.headers["Cache-Control"]).to include("no-store")
     end
@@ -69,8 +70,11 @@ RSpec.describe Admin::SpadBridgeUsersController do
           provider_name: "discord",
           provider_uid: "123456789012345678",
         )
+        membership = Fabricate(:group_user, user: user)
+        original_groups = user.group_users.order(:group_id).pluck(:group_id)
         get path, headers: headers
         first = response.parsed_body
+        membership.destroy!
         original_ids = User.order(:id).pluck(:id)
         UserAssociatedAccount.where(user: user).update_all(provider_uid: "123456789012345679")
         Fabricate(:user)
@@ -90,6 +94,7 @@ RSpec.describe Admin::SpadBridgeUsersController do
           )
           rows.concat(page["users"])
         end
+        expect(rows.find { |row| row["id"] == user.id }["group_ids"]).to eq(original_groups)
         expect(rows.map { |row| row["id"] }).to eq(original_ids)
         expect(rows.find { |row| row["id"] == user.id }["discord_id"]).to eq("123456789012345678")
       end

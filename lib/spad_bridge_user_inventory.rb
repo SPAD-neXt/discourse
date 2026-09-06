@@ -32,7 +32,7 @@ class SpadBridgeUserInventory
     next_offset = offset + users.length
     complete = next_offset == total
     {
-      schema_version: 1,
+      schema_version: 2,
       snapshot_id: snapshot_id,
       captured_at: snapshot[:captured_at],
       total: total,
@@ -51,6 +51,9 @@ class SpadBridgeUserInventory
       (SELECT provider_uid FROM user_associated_accounts
        WHERE user_associated_accounts.user_id = users.id AND provider_name = 'discord')
     SQL
+    group_ids = Arel.sql(<<~SQL)
+      ARRAY(SELECT group_id FROM group_users WHERE group_users.user_id = users.id ORDER BY group_id)
+    SQL
     rows =
       User.order(:id).pluck(
         :id,
@@ -58,17 +61,19 @@ class SpadBridgeUserInventory
         :active,
         :approved,
         :staged,
-        discord_id
+        discord_id,
+        group_ids
       )
     users =
-      rows.map do |id, username, active, approved, staged, provider_uid|
+      rows.map do |id, username, active, approved, staged, provider_uid, memberships|
         {
           id: id,
           username: username,
           active: active,
           approved: approved,
           staged: staged,
-          discord_id: provider_uid
+          discord_id: provider_uid,
+          group_ids: memberships
         }
       end
     {
@@ -79,7 +84,7 @@ class SpadBridgeUserInventory
   end
 
   def self.cache_key(admin_id, snapshot_id)
-    "spad-bridge-user-inventory:#{admin_id}:#{snapshot_id}"
+    "spad-bridge-user-inventory-v2:#{admin_id}:#{snapshot_id}"
   end
 
   private_class_method :capture, :cache_key
