@@ -180,7 +180,7 @@ class Auth::DefaultCurrentUserProvider
       raise Discourse::InvalidAccess if current_user.suspended? || !current_user.active
 
       if !Rails.env.profile?
-        admin_api_key_limiter.performed!
+        enforce_admin_api_rate_limit
 
         # Don't enforce the default per ip limits for authenticated admin api
         # requests
@@ -454,6 +454,26 @@ class Auth::DefaultCurrentUserProvider
 
   def can_write?
     @can_write ||= !Discourse.pg_readonly_mode?
+  end
+
+  def enforce_admin_api_rate_limit
+    # nginx must normalize X-Forwarded-For using only the trusted reverse proxy.
+    sources = GlobalSetting.spad_bridge_api_source_ips.to_s.split
+    if sources.include?(@request.ip)
+      limit = Integer(GlobalSetting.spad_bridge_api_reqs_per_minute)
+      return if limit == 0
+      raise ArgumentError, "Negative bridge API limit" if limit < 0
+
+      RateLimiter.new(
+        nil,
+        "spad_bridge_admin_api_min_#{@request.ip}",
+        limit,
+        1.minute,
+        error_code: "admin_api_key_rate_limit",
+      ).performed!
+    else
+      admin_api_key_limiter.performed!
+    end
   end
 
   def admin_api_key_limiter

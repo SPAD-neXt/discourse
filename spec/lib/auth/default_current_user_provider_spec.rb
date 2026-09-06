@@ -199,6 +199,56 @@ RSpec.describe Auth::DefaultCurrentUserProvider do
     context "with rate limiting" do
       before { RateLimiter.enable }
 
+      context "with a source-specific bridge limit" do
+        let(:api_key) { ApiKey.create!(user_id: user.id, created_by_id: -1) }
+        let(:params) { { "HTTP_API_KEY" => api_key.key, "REMOTE_ADDR" => "192.0.2.30" } }
+
+        before do
+          freeze_time
+          global_setting :spad_bridge_api_source_ips, "192.0.2.30 198.51.100.10"
+          global_setting :spad_bridge_api_reqs_per_minute, 0
+          global_setting :max_admin_api_reqs_per_minute, 1
+          RateLimiter.new(nil, "admin_api_min", 1, 60).clear!
+          RateLimiter.new(nil, "spad_bridge_admin_api_min_192.0.2.30", 1, 60).clear!
+          RateLimiter.new(nil, "spad_bridge_admin_api_min_198.51.100.10", 1, 60).clear!
+        end
+
+        it "allows repeated authenticated provisioning requests from either configured source" do
+          %w[192.0.2.30 198.51.100.10].each do |source|
+            3.times do
+              expect(provider("/", params.merge("REMOTE_ADDR" => source)).current_user).to eq(user)
+            end
+          end
+        end
+
+        it "still rejects an invalid key from a configured source" do
+          expect do
+            provider("/", params.merge("HTTP_API_KEY" => "invalid")).current_user
+          end.to raise_error(Discourse::InvalidAccess)
+        end
+
+        it "retains the global limit for other sources" do
+          other = params.merge("REMOTE_ADDR" => "203.0.113.10")
+          expect(provider("/", other).current_user).to eq(user)
+          expect { provider("/", other).current_user }.to raise_error(RateLimiter::LimitExceeded)
+        end
+
+        it "uses separate finite budgets for each configured source in operation" do
+          global_setting :spad_bridge_api_reqs_per_minute, 1
+          expect(provider("/", params).current_user).to eq(user)
+          expect { provider("/", params).current_user }.to raise_error(RateLimiter::LimitExceeded)
+          expect(provider("/", params.merge("REMOTE_ADDR" => "198.51.100.10")).current_user).to eq(
+            user,
+          )
+        end
+
+        it "retains the global limit when no sources are configured" do
+          global_setting :spad_bridge_api_source_ips, ""
+          expect(provider("/", params).current_user).to eq(user)
+          expect { provider("/", params).current_user }.to raise_error(RateLimiter::LimitExceeded)
+        end
+      end
+
       it "rate limits admin api requests" do
         global_setting :max_admin_api_reqs_per_minute, 3
 
