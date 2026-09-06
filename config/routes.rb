@@ -96,6 +96,7 @@ Discourse::Application.routes.draw do
            :constraints => ImpersonatorConstraint.new
 
     namespace :admin, constraints: StaffConstraint.new do
+      get "spad-bridge/users" => "spad_bridge_users#index", :constraints => AdminConstraint.new
       get "" => "admin#index"
       get "search" => "search#index"
       get "schema/:setting_name" => "admin#index"
